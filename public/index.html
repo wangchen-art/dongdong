@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>贵金属回收报价</title>
+  <!-- 禁止搜索引擎收录 -->
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 页面头部 -->
+    <header class="header">
+      <div class="header-left">
+        <h1 class="header-title">贵金属回收报价</h1>
+        <span class="header-subtitle">实时行情 · 权威数据</span>
+      </div>
+      <div class="header-right">
+        <span class="update-time" id="updateTime">更新中...</span>
+        <button class="admin-btn" id="adminBtn" title="管理后台">⚙️</button>
+      </div>
+    </header>
+
+    <!-- 状态提示条 -->
+    <div class="status-bar" id="statusBar" style="display:none;"></div>
+
+    <!-- 价格看板主体 -->
+    <main class="price-board" id="priceBoard">
+      <div class="loading" id="loadingIndicator">加载价格数据中...</div>
+    </main>
+
+    <!-- 页面底部 -->
+    <footer class="footer">
+      <p>数据来源：国际价格 · 国内行情 | 回收价已扣除加工及运营成本</p>
+      <p class="footer-disclaimer">本平台价格仅供参考，不构成交易依据</p>
+    </footer>
+
+    <!-- ========== 管理后台浮层 ========== -->
+    <div class="overlay" id="adminOverlay">
+      <div class="overlay-backdrop" id="overlayBackdrop"></div>
+      <div class="overlay-panel">
+
+        <!-- 登录表单 -->
+        <div class="login-form" id="loginForm">
+          <h2 class="panel-title">管理员登录</h2>
+          <div class="form-group">
+            <label for="passwordInput" class="form-label">管理密码</label>
+            <input
+              type="password"
+              id="passwordInput"
+              class="form-input"
+              placeholder="请输入管理密码"
+              autocomplete="current-password"
+            >
+          </div>
+          <button class="btn btn-primary" id="loginBtn">登 录</button>
+          <p class="form-error" id="loginError" style="display:none;"></p>
+        </div>
+
+        <!-- 差价设置面板 -->
+        <div class="diff-panel" id="diffPanel" style="display:none;">
+          <div class="panel-header">
+            <h2 class="panel-title">差价设置</h2>
+            <button class="btn btn-text" id="logoutBtn">退出登录</button>
+          </div>
+          <div class="diff-list" id="diffList">
+            <!-- 由 JavaScript 动态生成 -->
+          </div>
+          <!-- 密码修改区域 -->
+          <div class="pwd-section">
+            <button class="pwd-toggle" id="pwdToggleBtn">修改密码</button>
+            <div class="pwd-form" id="pwdForm">
+              <input type="password" id="oldPwdInput" class="form-input" placeholder="原密码" autocomplete="current-password">
+              <input type="password" id="newPwdInput" class="form-input" placeholder="新密码（至少 4 位）" autocomplete="new-password">
+              <input type="password" id="confirmPwdInput" class="form-input" placeholder="确认新密码" autocomplete="new-password">
+              <div class="pwd-actions">
+                <button class="btn btn-primary btn-small" id="savePwdBtn">保存</button>
+                <span class="pwd-status" id="pwdStatus"></span>
+              </div>
+            </div>
+          </div>
+          
+              <div class="pwd-actions">
+                <button class="btn btn-primary btn-small" id="saveSettingsBtn">保存</button>
+                <span class="pwd-status" id="settingsStatus"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript 模块 -->
+  <script src="/js/api.js"></script>
+  <script src="/js/app.js"></script>
+  <script src="/js/admin.js"></script>
+</body>
+</html>

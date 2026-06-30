@@ -1,0 +1,21 @@
+{
+  "name": "precious-metal-prices",
+  "version": "1.0.0",
+  "description": "贵金属回收价格展示系统",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "pretest": "node -e \"try{require('fs').unlinkSync('./data/differentials.json')}catch(e){}\"",
+    "test": "mocha test/**/*.test.js --timeout 10000 --exit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "chai": "^4.5.0",
+    "mocha": "^11.1.0",
+    "supertest": "^7.1.0"
+  }
+}
