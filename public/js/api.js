@@ -15,17 +15,25 @@ const API = {
     return res.json();
   },
 
-  /**
-   * 更新系统设置
-   */
-  async updateSettings(settings, token) {
-    var res = await fetch('/api/admin/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      body: JSON.stringify(settings),
+  /** 获取销售差价 */
+  async getSalesDifferentials(token) {
+    var res = await fetch('/api/admin/sales-differentials', {
+      headers: { Authorization: 'Bearer ' + token },
     });
     var data = await res.json();
-    if (!res.ok) throw new Error(data.error || '更新设置失败');
+    if (!res.ok) throw new Error(data.error || '获取销售差价失败');
+    return data;
+  },
+
+  /** 设置销售差价 */
+  async setSalesDifferential(metal, differential, token) {
+    var res = await fetch('/api/admin/sales-differentials/' + metal, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ differential }),
+    });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.error || '设置销售差价失败');
     return data;
   },
 

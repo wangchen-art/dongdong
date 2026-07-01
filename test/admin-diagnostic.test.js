@@ -78,5 +78,12 @@ describe('admin.js 前端诊断', function() {
     expect(js).to.include('var overlay');
     expect(js).to.include('getElementById');
     expect(js).to.include('adminBtn');
+  
+  it('退出登录后跳转到首页 /', async function () {
+    var adminRes = await request.get('/js/admin.js');
+    var adminJs = adminRes.text;
+    expect(adminJs).to.include('window.location.href');
   });
+
+});
 });

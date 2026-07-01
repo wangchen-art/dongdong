@@ -108,6 +108,14 @@ body {
   white-space: nowrap;
 }
 
+.realtime-clock {
+  font-size: var(--font-size-sm);
+  color: var(--accent-gold);
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: 0.5px;
+}
+
 .admin-btn {
   display: none;
   background: none;
@@ -270,15 +278,6 @@ body {
   color: var(--text-muted);
   margin-left: 4px;
   font-weight: 400;
-}
-
-/* 数据源标记 */
-.card-source {
-  margin-top: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-color);
-  font-size: var(--font-size-xs);
-  color: var(--text-muted);
 }
 
 /* ---- 价格跳动动画 ---- */
@@ -451,6 +450,23 @@ body {
   font-size: var(--font-size-sm);
 }
 
+.btn-diff-save {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent-gold);
+  color: #000;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s;
+}
+
+.btn-diff-save:hover {
+  background: var(--accent-gold-light);
+}
+
 /* ---- 差价设置面板 ---- */
 .diff-list {
   display: flex;
@@ -461,10 +477,9 @@ body {
 .diff-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
-  background: var(--bg-card);
-  border-radius: var(--radius-sm);
+  gap: 8px;
+  padding: 8px 4px;
+  background: transparent;
 }
 
 .diff-metal {
@@ -479,7 +494,7 @@ body {
 }
 
 .diff-input {
-  flex: 1;
+  width: 70px;
   background: var(--bg-input);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -583,49 +598,147 @@ body {
 
 /* ---- 响应式布局 ---- */
 
-/* 平板：两列 */
+/* 平板 */
 @media (max-width: 900px) {
-  .price-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
   #app {
     padding: 16px;
   }
-
   .header-title {
     font-size: 18px;
   }
+  .price-table tbody td {
+    padding: 10px 12px;
+  }
 }
 
-/* 手机：单列 */
+/* 手机 */
 @media (max-width: 520px) {
-  .price-grid {
-    grid-template-columns: 1fr;
-  }
-
   .header {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
   }
-
   .header-right {
     width: 100%;
     justify-content: space-between;
   }
-
   .overlay-panel {
     margin: 16px;
     padding: 24px;
     max-width: 100%;
   }
-
   .diff-row {
     flex-wrap: wrap;
   }
-
   .diff-input {
     width: 70px;
   }
+}
+
+/* ---- 涨红跌绿 ---- */
+.price-cell {
+  text-align: right;
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.3s ease;
+}
+.price-cell.up {
+  color: var(--accent-red);
+}
+.price-cell.down {
+  color: var(--accent-green);
+}
+
+
+/* ---- 面板小标题 ---- */
+.panel-subtitle {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--accent-gold);
+  margin: 20px 0 8px 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.panel-subtitle:first-of-type {
+  border-top: none;
+  margin-top: 0;
+}
+
+
+/* ---- 折叠差价卡片 ---- */
+.diff-card {
+  margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.diff-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.diff-card-header:hover {
+  background: var(--bg-card-hover);
+}
+
+.diff-card-header .arrow {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+
+.diff-card-body {
+  padding: 10px 14px;
+  background: var(--bg-card);
+}
+
+.diff-card-body.collapsed {
+  display: none;
+}
+
+/* ---- 单位右上角 ---- */
+.price-cell {
+  position: relative;
+  padding-top: 22px !important;
+}
+
+.price-unit {
+  position: absolute;
+  top: 4px;
+  right: 16px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 400;
+  line-height: 1;
+}
+
+.btn-diff-save-all {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  margin-top: 8px;
+  background: var(--accent-gold);
+  color: #000;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-diff-save-all:hover {
+  background: var(--accent-gold-light);
 }

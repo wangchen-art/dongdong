@@ -6,6 +6,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 
 // 加载 .env 配置（如果存在）
 try { require('dotenv').config(); } catch (e) { /* dotenv 未安装时静默跳过 */ }
@@ -24,6 +25,7 @@ const METALS = [
 
 /** 差价持久化文件路径 */
 const DIFFERENTIALS_FILE = path.join(__dirname, 'data', 'differentials.json');
+const SALES_DIFF_FILE = path.join(__dirname, 'data', 'sales-differentials.json');
 
 /** 管理员密码（运行时可变，初始从环境变量读取） */
 let adminPassword = process.env.ADMIN_PASSWORD;
@@ -42,16 +44,17 @@ var LOCKOUT_DURATION = 60 * 60 * 1000;
  * 数据在内存中读写，并定期持久化到 JSON 文件
  */
 class DifferentialStore {
-  constructor() {
+  constructor(filePath) {
     /** @type {Object.<string, number>} */
     this.data = { gold: 0, silver: 0, platinum: 0, palladium: 0 };
+    this.filePath = filePath || DIFFERENTIALS_FILE;
     this._loadFromDisk();
   }
 
   /** 从磁盘加载已持久化的差价数据 */
   _loadFromDisk() {
     try {
-      if (fs.existsSync(DIFFERENTIALS_FILE)) {
+      if (fs.existsSync(this.filePath)) {
         const raw = fs.readFileSync(DIFFERENTIALS_FILE, 'utf-8');
         const saved = JSON.parse(raw);
         Object.keys(this.data).forEach((key) => {
@@ -69,11 +72,11 @@ class DifferentialStore {
   /** 将差价数据写入磁盘 */
   persist() {
     try {
-      const dir = path.dirname(DIFFERENTIALS_FILE);
+      const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(DIFFERENTIALS_FILE, JSON.stringify(this.data, null, 2), 'utf-8');
+      fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
     } catch (err) {
       console.error('[差价存储] 持久化写入失败:', err.message);
     }
@@ -179,37 +182,31 @@ class AuthStore {
  */
 
 /** 金衡盎司转克 */
-const OUNCE_TO_GRAM = 31.1035;
-
 /** 默认汇率（USD/CNY），API 不可用时使用 */
-const DEFAULT_EXCHANGE_RATE = 7.25;
-
 // ==========================================
 // 模拟价格数据（API 不可用时的降级方案）
 // ==========================================
 
 const MOCK_PRICES = {
-  gold:      { usd: 2350.00, cny: 548.50 },
-  silver:    { usd: 30.50,   cny: 7.12 },
-  platinum:  { usd: 985.00,  cny: 228.00 },
-  palladium: { usd: 920.00,  cny: 213.00 },
+  gold:      { cny: 548.50 },
+  silver:    { cny: 7.12 },
+  platinum:  { cny: 228.00 },
+  palladium: { cny: 213.00 },
 };
+
+/** 模拟数据波动函数 */
+function jitter(val, pct = 0.02) { return parseFloat((val * (1 + (Math.random() - 0.5) * pct)).toFixed(2)); }
 
 class PriceCache {
   constructor(differentialStore) {
-    /** @type {Object.<string, Object>} */
-    this.exchangeRate = DEFAULT_EXCHANGE_RATE;
-
-    /** @type {Object.<string, Object>} */
     this.cache = {};
     this.differentialStore = differentialStore;
     this.status = '初始化中';
 
-    // 初始化缓存为模拟数据（国际价从 USD/oz 转换为 CNY/g）
+    // 初始化缓存为模拟数据
     METALS.forEach((m) => {
-      const cnyPerGram = (MOCK_PRICES[m.key].usd * DEFAULT_EXCHANGE_RATE) / OUNCE_TO_GRAM;
       this.cache[m.key] = {
-        internationalPriceCNYPerGram: parseFloat(cnyPerGram.toFixed(2)),
+        internationalPriceCNYPerGram: MOCK_PRICES[m.key].cny,
         domesticPriceCNY: MOCK_PRICES[m.key].cny,
         timestamp: Date.now(),
         source: 'mock',
@@ -217,117 +214,46 @@ class PriceCache {
     });
   }
 
-  /** 尝试获取实时汇率（USD/CNY），失败时使用默认值 */
-  async _fetchExchangeRate() {
-    try {
-      const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD', {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.rates && data.rates.CNY) {
-          this.exchangeRate = data.rates.CNY;
-          console.log('[汇率] 已获取实时汇率: 1 USD = ' + this.exchangeRate + ' CNY');
-        }
-      }
-    } catch (err) {
-      // 使用默认汇率，静默处理
-    }
-  }
-
-  /**
-   * 尝试从外部 API 更新价格数据
-   * 优先获取实际市场价格，失败时使用模拟数据
-   */
   async update() {
-    await this._fetchExchangeRate();
-    await this._fetchInternationalPrices();
-    await this._fetchDomesticPrices();
+    // 通过 Python 子进程获取 CCMN 贵金属价格
+    await this._fetchFromPython();
     this._ensureMockFallback();
   }
 
-  /** 获取国际贵金属价格（美元/盎司） */
-  async _fetchInternationalPrices() {
-    // 如果有 API Key，尝试请求 GoldAPI
-    const apiKey = process.env.GOLD_API_KEY;
-    if (!apiKey) return; // 没有 API Key，跳过
-
-    for (const metal of METALS) {
-      try {
-        const url = `https://www.goldapi.io/api/${metal.symbol}/USD`;
-        const response = await fetch(url, {
-          headers: { 'x-access-token': apiKey },
-          signal: AbortSignal.timeout(5000),
+  /**
+   * 使用 Python (AKShare) 获取长江有色金属网贵金属行情
+   */
+  async _fetchFromPython() {
+    const scriptPath = path.join(__dirname, 'fetch_prices.py');
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const child = spawn('python', [scriptPath], { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
+        let stdout = '', stderr = '';
+        child.stdout.on('data', (c) => { stdout += c.toString(); });
+        child.stderr.on('data', (c) => { stderr += c.toString(); });
+        child.on('close', (code) => {
+          if (code !== 0) { if (stderr) console.error('[Python] 错误:', stderr.trim()); reject(new Error('退出码 ' + code)); return; }
+          try { resolve(JSON.parse(stdout)); } catch(e) { reject(new Error('解析失败: ' + e.message)); }
         });
-        if (response.ok) {
-          const data = await response.json();
-          // 将国际价格从 USD/oz 转换为 CNY/g
-          const cnyGram = (data.price * this.exchangeRate) / OUNCE_TO_GRAM;
-          this.cache[metal.key] = {
-            internationalPriceCNYPerGram: parseFloat(cnyGram.toFixed(2)),
-            domesticPriceCNY: this.cache[metal.key]?.domesticPriceCNY || MOCK_PRICES[metal.key].cny,
-            timestamp: Date.now(),
-            source: 'goldapi',
-          };
+        child.on('error', reject);
+      });
+      const ts = Date.now();
+      METALS.forEach((m) => {
+        const d = result[m.key];
+        if (d && typeof d.price === 'number') {
+          this.cache[m.key] = { internationalPriceCNYPerGram: d.price, domesticPriceCNY: d.price, timestamp: ts, source: 'ccmn' };
         }
-      } catch (err) {
-        // 单个金属请求失败不影响其他金属
-        console.error(`[国际价格] ${metal.name} 获取失败:`, err.message);
-      }
-    }
+      });
+    } catch(err) { console.error('[Python] 获取失败:', err.message); }
   }
 
-  /** 获取国内贵金属行情（人民币/克） */
-  async _fetchDomesticPrices() {
-    // 尝试从新浪财经获取国内行情
-    const sinaSymbols = {
-      gold:      'au9999',
-      silver:    'ag9999',
-      platinum:  'pt9995',
-      palladium: 'pd9995',
-    };
-
-    for (const metal of METALS) {
-      try {
-        const symbol = sinaSymbols[metal.key];
-        const url = `https://hq.sinajs.cn/list=${symbol}`;
-        const response = await fetch(url, {
-          headers: { Referer: 'https://finance.sina.com.cn' },
-          signal: AbortSignal.timeout(5000),
-        });
-        if (response.ok) {
-          const text = await response.text();
-          // 解析新浪返回的 CSV 格式
-          const match = text.match(/"([^"]+)"/);
-          if (match) {
-            const fields = match[1].split(',');
-            const currentPrice = parseFloat(fields[3]); // 当前价在 index 3
-            if (!isNaN(currentPrice)) {
-              this.cache[metal.key] = {
-                ...this.cache[metal.key],
-                domesticPriceCNY: currentPrice,
-                timestamp: Date.now(),
-                source: 'sina',
-              };
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`[国内行情] ${metal.name} 获取失败:`, err.message);
-      }
-    }
-  }
-
-  /** 确保所有金属都有有效数据，API 失败时使用模拟数据 */
+  /** 确保所有金属都有有效数据，Python 失败时使用模拟数据降级 */
   _ensureMockFallback() {
     METALS.forEach((metal) => {
       const cached = this.cache[metal.key];
-      // 如果缓存数据超过 60 秒未更新，混入模拟波动保持数据"鲜活"
-      if (Date.now() - cached.timestamp > 60000) {
-        const usdJittered = jitter(MOCK_PRICES[metal.key].usd);
-        const cnyFallback = (usdJittered * this.exchangeRate) / OUNCE_TO_GRAM;
-        cached.internationalPriceCNYPerGram = parseFloat(cnyFallback.toFixed(2));
+      if (Date.now() - cached.timestamp > 90000) {
         cached.domesticPriceCNY = jitter(MOCK_PRICES[metal.key].cny);
+        cached.internationalPriceCNYPerGram = cached.domesticPriceCNY;
         cached.timestamp = Date.now();
         cached.source = 'mock';
       }
@@ -344,10 +270,15 @@ class PriceCache {
     return METALS.map((metal) => {
       const price = this.cache[metal.key];
       const diff = differentials[metal.key] || 0;
+      var salesDiff = salesDifferentialStore.getAll()[metal.key] || 0;
 
-      // 回收价 = 国内实时价(CNY/g) - 管理员差价
+      // 回收价 = 国际价 - 回收差价
       const recyclingPrice = parseFloat(
-        (price.domesticPriceCNY - diff).toFixed(2)
+        (price.internationalPriceCNYPerGram - diff).toFixed(2)
+      );
+      // 销售价 = 国际价 + 销售差价
+      const salesPrice = parseFloat(
+        (price.internationalPriceCNYPerGram + salesDiff).toFixed(2)
       );
 
       return {
@@ -357,6 +288,7 @@ class PriceCache {
         internationalPrice: price.internationalPriceCNYPerGram,
         domesticPrice: price.domesticPriceCNY,
         recyclingPrice: recyclingPrice,
+        salesPrice: salesPrice,
         differential: diff,
         lastUpdated: price.timestamp,
         source: price.source,
@@ -372,7 +304,8 @@ class PriceCache {
 const app = express();
 
 /** 全局实例 */
-const differentialStore = new DifferentialStore();
+const differentialStore = new DifferentialStore(DIFFERENTIALS_FILE);
+const salesDifferentialStore = new DifferentialStore(SALES_DIFF_FILE);
 const authStore = new AuthStore();
 const priceCache = new PriceCache(differentialStore);
 
@@ -546,14 +479,52 @@ app.put('/api/admin/differentials/:metal', authMiddleware, (req, res) => {
   if (!metalPrice) {
     return res.status(400).json({ error: '无法获取当前价格' });
   }
-  if (differential > metalPrice.domesticPrice) {
-    return res.status(400).json({ error: '差价不能大于当前国内价 ' + metalPrice.domesticPrice });
+  if (differential > metalPrice.internationalPrice) {
+    return res.status(400).json({ error: '差价不能大于当前国际价 ' + metalPrice.internationalPrice });
   }
 
   differentialStore.set(metal, differential);
   res.json({
     metal,
     differential: differentialStore.get(metal),
+    updatedAt: Date.now(),
+  });
+
+
+});
+
+/**
+ * GET /api/admin/sales-differentials
+ * 获取所有金属的销售差价（需认证）
+ */
+app.get('/api/admin/sales-differentials', authMiddleware, (req, res) => {
+  const differentials = salesDifferentialStore.getAll();
+  res.json({ differentials });
+});
+
+/**
+ * PUT /api/admin/sales-differentials/:metal
+ * 设置某金属的销售差价（需认证）
+ */
+app.put('/api/admin/sales-differentials/:metal', authMiddleware, (req, res) => {
+  const { metal } = req.params;
+  const { differential } = req.body;
+
+  const validMetal = METALS.find(function(m) { return m.key === metal; });
+  if (!validMetal) {
+    return res.status(400).json({ error: '无效的金属类型: ' + metal });
+  }
+  if (typeof differential !== 'number' || isNaN(differential)) {
+    return res.status(400).json({ error: '差价必须为有效数字' });
+  }
+  if (differential < 0) {
+    return res.status(400).json({ error: '销售差价不能为负数' });
+  }
+
+  salesDifferentialStore.set(metal, differential);
+  res.json({
+    metal: metal,
+    differential: salesDifferentialStore.get(metal),
     updatedAt: Date.now(),
   });
 });
@@ -576,10 +547,31 @@ app.use((err, req, res, _next) => {
 
 // ---- 启动定时价格更新 ----
 
-/** 重启价格刷新定时器 */
+/** 价格刷新间隔（毫秒） */
+const PRICE_UPDATE_INTERVAL = 15000;
+
+/**
+ * 启动定时价格更新
+ * 1. 启动时立即拉取一次真实数据
+ * 2. 之后每隔 15 秒拉取一次
+ */
+async function startPriceUpdates() {
+  console.log('[价格更新] 启动定时价格刷新，间隔 15 秒');
+  // 首次立即拉取
+  await priceCache.update().catch(err => {
+    console.error('[价格更新] 首次拉取失败:', err.message);
+  });
+  // 后续每隔 15 秒拉取一次
+  setInterval(() => {
+    priceCache.update().catch(err => {
+      console.error('[价格更新] 定时拉取失败:', err.message);
+    });
+  }, PRICE_UPDATE_INTERVAL);
+}
 
 // ---- 服务启动 ----
 if (require.main === module) {
+  startPriceUpdates();
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`[服务启动] 贵金属回收报价系统运行于 http://localhost:${PORT}`);
@@ -588,4 +580,4 @@ if (require.main === module) {
 }
 
 // ---- 导出（供测试使用）----
-module.exports = { app, DifferentialStore, AuthStore, PriceCache, METALS, resetLoginAttempts: function() { loginAttempts.clear(); } };
+module.exports = { app, DifferentialStore, AuthStore, PriceCache, METALS, salesDifferentialStore, resetLoginAttempts: function() { loginAttempts.clear(); } };

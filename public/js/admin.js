@@ -1,3 +1,94 @@
+// 销售差价管理
+var metalNames = { gold: "黄金", silver: "白银", platinum: "铂金", palladium: "钯金" };
+
+async function loadSalesDifferentials(token) {
+  try {
+    var data = await API.getSalesDifferentials(token);
+    var diffs = data.differentials;
+    var list = document.getElementById('salesDiffList');
+    if (!list) return;
+    list.innerHTML = '';
+    Object.keys(diffs).forEach(function(metal) {
+      var row = document.createElement('div');
+      row.className = 'diff-row';
+      row.innerHTML = '<span class="diff-metal">' + metalNames[metal] + '</span>'
+        + '<span class="diff-current-price">+' + diffs[metal] + ' 元/克</span>'
+        + '<input type="number" class="diff-input" id="sales-' + metal + '-input" value="' + diffs[metal] + '" step="0.5" min="0">'
+        + '<span style="display:none" onclick="saveSalesDiff(\'' + metal + '\',\'' + token + '\')">保存</button>'
+        + '<span class="diff-status" id="sales-' + metal + '-status"></span>';
+      list.appendChild(row);
+    });
+    // 添加保存差价按钮
+    var saveBtn = document.createElement('button');
+    saveBtn.className = 'btn-diff-save-all';
+    saveBtn.textContent = '保存差价';
+    saveBtn.onclick = saveAllSalesDiff;
+    list.appendChild(saveBtn);
+  } catch(err) {
+    console.error('[销售差价] 加载失败:', err.message);
+  }
+}
+
+async function saveSalesDiff(metal, token) {
+  var input = document.getElementById('sales-' + metal + '-input');
+  var status = document.getElementById('sales-' + metal + '-status');
+  var value = parseFloat(input.value);
+  if (isNaN(value) || value < 0) {
+    status.textContent = '无效'; status.className = 'diff-status error';
+    return;
+  }
+  try {
+    var data = await API.setSalesDifferential(metal, value, token);
+    status.textContent = '已保存';
+    status.className = 'diff-status';
+    // 更新显示
+    var currentEl = document.querySelector('#salesDiffList .diff-row:nth-child(' + (Object.keys({gold:1,silver:2,platinum:3,palladium:4}).indexOf(metal)+1) + ') .diff-current-price');
+    if (currentEl) currentEl.textContent = '+' + value + ' 元/克';
+  } catch(err) {
+    status.textContent = err.message;
+    status.className = 'diff-status error';
+  }
+}
+
+// 批量保存差价（回收）
+async function saveAllRecyclingDiff() {
+  var metals = ['gold','silver','platinum','palladium'];
+  for (var i = 0; i < metals.length; i++) {
+    var metal = metals[i];
+    var input = document.getElementById('diff-input-' + metal);
+    if (!input) continue;
+    var val = parseFloat(input.value);
+    if (isNaN(val) || val < 0) continue;
+    try { await API.setDifferential(metal, val, currentToken); } catch(e) { console.error(e.message); }
+  }
+  API.fetchPrices().then(function(p) { loadDifferentials(p, currentToken); });
+}
+
+// 批量保存差价（销售）
+async function saveAllSalesDiff() {
+  var metals = ['gold','silver','platinum','palladium'];
+  for (var i = 0; i < metals.length; i++) {
+    var metal = metals[i];
+    var input = document.getElementById('sales-' + metal + '-input');
+    if (!input) continue;
+    var val = parseFloat(input.value);
+    if (isNaN(val) || val < 0) continue;
+    try { await API.setSalesDifferential(metal, val, currentToken); } catch(e) { console.error(e.message); }
+  }
+  loadSalesDifferentials(currentToken);
+}
+
+// 折叠展开切换
+function toggleSection(id) {
+  var body = document.getElementById(id);
+  if (!body) return;
+  body.classList.toggle('collapsed');
+  var arrow = body.previousElementSibling.querySelector('.arrow');
+  if (arrow) {
+    arrow.textContent = body.classList.contains('collapsed') ? '▶' : '▼';
+  }
+}
+
 // ============================================
 // admin.js - 管理员后台逻辑
 // 负责登录认证、差价设置管理
@@ -14,7 +105,7 @@ const loginBtn = document.getElementById('loginBtn');
 const loginError = document.getElementById('loginError');
 const logoutBtn = document.getElementById('logoutBtn');
 const diffList = document.getElementById('diffList');
-const overlayBackdrop = document.getElementById('overlayBackdrop');
+var overlayBackdrop = document.getElementById('overlayBackdrop');
 const pwdToggleBtn = document.getElementById('pwdToggleBtn');
 const pwdForm = document.getElementById('pwdForm');
 const oldPwdInput = document.getElementById('oldPwdInput');
@@ -34,10 +125,6 @@ adminBtn.addEventListener('click', () => {
   checkAuth();
 });
 
-// 点击遮罩层：关闭浮层
-overlayBackdrop.addEventListener('click', () => {
-  overlay.classList.remove('active');
-});
 
 // 按下回车键触发的登录
 passwordInput.addEventListener('keydown', (e) => {
@@ -131,7 +218,7 @@ async function checkAuth() {
       const data = await API.getDifferentials(currentToken);
       // token 有效，显示差价面板
       renderDiffPanel(data.differentials);
-      showDiffPanel();
+      showDiffPanel(currentToken);
     } catch {
       // token 已过期或无效，清除并显示登录表单
       currentToken = null;
@@ -156,9 +243,16 @@ function showLoginForm() {
 }
 
 /** 显示差价设置面板 */
-function showDiffPanel() {
+function showDiffPanel(token) {
   loginForm.style.display = 'none';
   diffPanel.style.display = 'block';
+  // 加载差价数据到内存中，等用户展开卡片时显示
+  if (token) {
+    loadSalesDifferentials(token);
+    API.fetchPrices().then(function(prices) {
+      loadDifferentials(prices, token);
+    });
+  }
 }
 
 // ---- 登录逻辑 ----
@@ -183,7 +277,7 @@ async function handleLogin() {
     // 获取差价数据并渲染面板
     const diffData = await API.getDifferentials(currentToken);
     renderDiffPanel(diffData.differentials);
-    showDiffPanel();
+    showDiffPanel(currentToken);
     showAdminButton();
   } catch (err) {
     // 检查是否包含剩余次数信息
@@ -223,6 +317,7 @@ function handleLogout() {
   localStorage.removeItem(ADMIN_TOKEN_KEY);
   hideAdminButton();
   showLoginForm();
+  window.location.href = '/';
 }
 
 // ---- 差价面板渲染 ----
@@ -260,16 +355,10 @@ function renderDiffPanel(differentials) {
         min="0"
         placeholder="差价"
       >
-      <span class="diff-unit">CNY/g</span>
-      <button class="btn btn-primary btn-small" id="diff-save-${metal.key}">保存</button>
       <span class="diff-status" id="diff-status-${metal.key}"></span>
     `;
 
     diffList.appendChild(row);
-
-    // 绑定保存按钮事件
-    const saveBtn = row.querySelector(`#diff-save-${metal.key}`);
-    saveBtn.addEventListener('click', () => handleSaveDifferential(metal.key));
 
     // 输入框回车保存
     const input = row.querySelector(`#diff-input-${metal.key}`);
@@ -277,6 +366,13 @@ function renderDiffPanel(differentials) {
       if (e.key === 'Enter') handleSaveDifferential(metal.key);
     });
   });
+
+  // 添加保存差价按钮
+  var saveAllBtn = document.createElement('button');
+  saveAllBtn.className = 'btn-diff-save-all';
+  saveAllBtn.textContent = '保存差价';
+  saveAllBtn.onclick = saveAllRecyclingDiff;
+  diffList.appendChild(saveAllBtn);
 
   // 尝试获取当前价格显示在差价面板中
   updateDiffPanelPrices();
@@ -373,8 +469,6 @@ async function handlePasswordChange() {
     return;
   }
 
-  savePwdBtn.disabled = true;
-  savePwdBtn.textContent = '保存中...';
   pwdStatus.textContent = '';
 
   try {
@@ -384,12 +478,10 @@ async function handlePasswordChange() {
     oldPwdInput.value = '';
     newPwdInput.value = '';
     confirmPwdInput.value = '';
-  } catch (err) {
+      } catch (err) {
     pwdStatus.textContent = err.message || '修改失败';
     pwdStatus.className = 'pwd-status error';
-  } finally {
-    savePwdBtn.disabled = false;
-    savePwdBtn.textContent = '保存';
+      } finally {
   }
 }
 
@@ -401,4 +493,11 @@ function showDiffStatus(metal, msg, type) {
     el.className = `diff-status${type ? ' ' + type : ''}`;
   }
 }
+
+
+
+
+
+
+
 

@@ -17,6 +17,7 @@
         <span class="header-subtitle">实时行情 · 权威数据</span>
       </div>
       <div class="header-right">
+        <span class="realtime-clock" id="realtimeClock">加载中...</span>
         <span class="update-time" id="updateTime">更新中...</span>
         <button class="admin-btn" id="adminBtn" title="管理后台">⚙️</button>
       </div>
@@ -32,7 +33,7 @@
 
     <!-- 页面底部 -->
     <footer class="footer">
-      <p>数据来源：国际价格 · 国内行情 | 回收价已扣除加工及运营成本</p>
+      <p>回收价 = 国际实时价 - 加工运营差价 | 数据来源：东方财富实时行情</p>
       <p class="footer-disclaimer">本平台价格仅供参考，不构成交易依据</p>
     </footer>
 
@@ -64,8 +65,21 @@
             <h2 class="panel-title">差价设置</h2>
             <button class="btn btn-text" id="logoutBtn">退出登录</button>
           </div>
-          <div class="diff-list" id="diffList">
+          <div class="diff-card">
+            <div class="diff-card-header" onclick="toggleSection('diffList')">
+              收购差价 <span class="arrow">▶</span>
+            </div>
+            <div class="diff-card-body collapsed" id="diffList">
             <!-- 由 JavaScript 动态生成 -->
+            </div>
+          </div>
+          <div class="diff-card">
+            <div class="diff-card-header" onclick="toggleSection('salesDiffList')">
+              销售差价 <span class="arrow">▶</span>
+            </div>
+            <div class="diff-card-body collapsed" id="salesDiffList">
+            <!-- 由 JavaScript 动态生成 -->
+            </div>
           </div>
           <!-- 密码修改区域 -->
           <div class="pwd-section">
@@ -78,16 +92,7 @@
                 <button class="btn btn-primary btn-small" id="savePwdBtn">保存</button>
                 <span class="pwd-status" id="pwdStatus"></span>
               </div>
-            </div>
-          </div>
-          
-              <div class="pwd-actions">
-                <button class="btn btn-primary btn-small" id="saveSettingsBtn">保存</button>
-                <span class="pwd-status" id="settingsStatus"></span>
-              </div>
-            </div>
-          </div>
-        </div>
+            </div>        </div>
 
       </div>
     </div>
@@ -99,3 +104,5 @@
   <script src="/js/admin.js"></script>
 </body>
 </html>
+
+

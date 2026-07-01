@@ -41,7 +41,7 @@ describe('API 接口集成测试', () => {
           'metal', 'name', 'symbol',
           'internationalPrice', 'domesticPrice',
           'recyclingPrice', 'differential',
-          'lastUpdated', 'source'
+          'lastUpdated', 'source', 'salesPrice'
         );
       });
     });
@@ -325,5 +325,72 @@ describe('差价约束验证', () => {
       .send({ differential: 0 });
   });
 });
+
+
+  describe('销售差价 API', function () {
+
+    beforeEach(function () {
+      if (resetLoginAttempts) resetLoginAttempts();
+    });
+
+    it('GET /api/admin/sales-differentials 未认证应返回 401', async function () {
+      var res = await request.get('/api/admin/sales-differentials');
+      expect(res.status).to.equal(401);
+    });
+
+    it('GET /api/admin/sales-differentials 应返回四种金属的销售差价', async function () {
+      var loginRes = await request.post('/api/admin/login').send({ password: 'test123' });
+      var token = loginRes.body.token;
+      var res = await request.get('/api/admin/sales-differentials')
+        .set('Authorization', 'Bearer ' + token);
+      expect(res.status).to.equal(200);
+      expect(res.body.differentials).to.have.all.keys(['gold','silver','platinum','palladium']);
+    });
+
+    it('PUT /api/admin/sales-differentials/:metal 应设置并返回销售差价', async function () {
+      var loginRes = await request.post('/api/admin/login').send({ password: 'test123' });
+      var token = loginRes.body.token;
+      var res = await request.put('/api/admin/sales-differentials/gold')
+        .set('Authorization', 'Bearer ' + token)
+        .send({ differential: 15 });
+      expect(res.status).to.equal(200);
+      expect(res.body.differential).to.equal(15);
+    });
+
+    it('销售差价不能为负数', async function () {
+      var loginRes = await request.post('/api/admin/login').send({ password: 'test123' });
+      var token = loginRes.body.token;
+      var res = await request.put('/api/admin/sales-differentials/gold')
+        .set('Authorization', 'Bearer ' + token)
+        .send({ differential: -5 });
+      expect(res.status).to.equal(400);
+    });
+
+  });
+
+  describe('销售价格计算', function () {
+
+    it('GET /api/prices 应返回 salesPrice 字段', async function () {
+      var res = await request.get('/api/prices');
+      expect(res.status).to.equal(200);
+      res.body.forEach(function (item) {
+        expect(item).to.have.property('salesPrice');
+      });
+    });
+
+    it('销售价格 = 国际价 + 销售差价', async function () {
+      var loginRes = await request.post('/api/admin/login').send({ password: 'test123' });
+      var token = loginRes.body.token;
+      await request.put('/api/admin/sales-differentials/gold')
+        .set('Authorization', 'Bearer ' + token)
+        .send({ differential: 10 });
+
+      var priceRes = await request.get('/api/prices');
+      var gold = priceRes.body.find(function (p) { return p.metal === 'gold'; });
+      expect(gold.salesPrice).to.equal(parseFloat((gold.internationalPrice + 10).toFixed(2)));
+    });
+
+  });
+
 
 
