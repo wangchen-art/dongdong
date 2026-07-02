@@ -79,8 +79,9 @@ body {
 /* ---- 页面头部 ---- */
 .header {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
+  gap: 32px;
   padding: 12px 0 16px;
   border-bottom: 2px solid var(--accent-gold-dim);
   margin-bottom: 20px;
@@ -101,6 +102,8 @@ body {
 .header-left {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  text-align: center;
   gap: 1px;
 }
 
@@ -120,8 +123,57 @@ body {
 
 .header-right {
   display: flex;
+  flex-direction: column;
   align-items: center;
+  gap: 6px;
+}
+
+.header-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   gap: 12px;
+}
+
+.header-phone-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  transition: all 0.25s ease;
+  cursor: pointer;
+}
+
+.header-phone-link:hover {
+  border-color: var(--accent-gold);
+  background: rgba(201, 169, 78, 0.08);
+  box-shadow: 0 0 16px rgba(201, 169, 78, 0.1);
+}
+
+.header-phone-number {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent-gold);
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.header-phone-hints {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.header-phone-hint {
+  font-size: 10px;
+  color: var(--accent-gold-dim);
+  white-space: nowrap;
+  letter-spacing: 0.5px;
 }
 
 .realtime-clock {
@@ -131,6 +183,7 @@ body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   letter-spacing: 0.3px;
+  text-align: center;
 }
 
 .update-time {
@@ -422,39 +475,8 @@ body {
   margin-top: 8px;
 }
 
-.footer-phone {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 18px;
-  color: var(--accent-gold);
-  font-weight: 600;
-  cursor: pointer;
-  padding: 8px 20px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  background: var(--bg-card);
-  transition: all 0.25s ease;
-  text-decoration: none;
-}
+/* 电话号码已移至 header，此样式不再使用 */
 
-.footer-phone:hover {
-  border-color: var(--accent-gold);
-  background: rgba(201, 169, 78, 0.06);
-  box-shadow: 0 0 16px rgba(201, 169, 78, 0.08);
-}
-
-.footer-phone-copy-hint {
-  font-size: var(--font-size-xs);
-  color: var(--text-dim);
-  font-weight: 400;
-}
-
-.footer-phone-number {
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: 1px;
-}
 
 /* ---- 底部联系方式与微信二维码区 ---- */
 .footer-content {
@@ -1044,12 +1066,20 @@ body {
 @media (max-width: 520px) {
   .header {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
+    text-align: center;
     gap: 8px;
   }
   .header-right {
     width: 100%;
-    justify-content: space-between;
+  }
+  .header-top-row {
+    width: 100%;
+    justify-content: center;
+    gap: 12px;
+  }
+  .header-phone-number {
+    font-size: 20px;
   }
   .header-title {
     font-size: 20px;
@@ -1091,13 +1121,7 @@ body {
     width: 70px;
     font-size: var(--font-size-xs);
   }
-  .footer-phone {
-    font-size: 16px;
-    padding: 6px 14px;
-  }
-  .footer-phone-number {
-    font-size: 22px;
-  }
+  /* footer-phone 已移至 header */
 }
 
 /* 二维码页面移动端适配 */
