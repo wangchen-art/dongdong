@@ -1,4 +1,4 @@
-// ==========================================
+﻿// ==========================================
 // server.js - 贵金属回收价格展示系统后端
 // ==========================================
 
@@ -22,13 +22,66 @@ const METALS = [
   { key: 'platinum',  name: '铂金',   symbol: 'XPT' },
   { key: 'palladium', name: '钯金',   symbol: 'XPD' },
 ];
+/** scraper.js 品种代码到系统 key 的映射（XAP=铂金） */
+const SCRAPER_METAL_MAP = { XAU: 'gold', XAG: 'silver', XAP: 'platinum', XPD: 'palladium' };
 
+
+
+/** 密码存储（加密持久化，使用 crypto.scryptSync） */
+const PASSWORD_FILE = path.join(__dirname, 'data', 'admin-password.json');
+const DEFAULT_PASSWORD = process.env.ADMIN_PASSWORD;
+
+class PasswordStore {
+  constructor() { this._load(); }
+  _load() {
+    // 检测重置密码标志：--reset-password 或 RESET_ADMIN_PASSWORD=true
+    if (process.argv.includes('--reset-password') || process.env.RESET_ADMIN_PASSWORD === 'true' || process.env.RESET_ADMIN_PASSWORD === '1') {
+      try { fs.unlinkSync(PASSWORD_FILE); console.log('[密码] 检测到重置标志，已删除密码文件'); } catch {}
+    }
+    try {
+      const data = JSON.parse(fs.readFileSync(PASSWORD_FILE, 'utf8'));
+      this.hash = Buffer.from(data.hash, 'hex');
+      this.salt = Buffer.from(data.salt, 'hex');
+      console.log('[密码] 已加载加密密码存储');
+      return;
+    } catch {}
+    this.hash = null;
+    this.salt = null;
+    const pwd = DEFAULT_PASSWORD || 'admin123';
+    console.log('[密码] 首次使用，保存默认密码');
+    this.salt = crypto.randomBytes(16);
+    this.hash = crypto.scryptSync(pwd, this.salt, 64);
+    this._save();
+  }
+  _save() {
+    const dir = path.dirname(PASSWORD_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(PASSWORD_FILE, JSON.stringify({
+      hash: this.hash.toString('hex'), salt: this.salt.toString('hex'),
+    }));
+  }
+  verify(password) {
+    if (!this.hash || !this.salt) return false;
+    try {
+      const hash = crypto.scryptSync(String(password), this.salt, 64);
+      return crypto.timingSafeEqual(this.hash, hash);
+    } catch { return false; }
+  }
+  change(oldPassword, newPassword) {
+    if (this.hash && this.salt && !this.verify(oldPassword)) throw new Error('原密码错误');
+    if (!newPassword || newPassword.length < 4) throw new Error('新密码长度至少 4 位');
+    if (this.verify(newPassword)) throw new Error('新密码不能与原密码相同');
+    this.salt = crypto.randomBytes(16);
+    this.hash = crypto.scryptSync(newPassword, this.salt, 64);
+    this._save();
+  }
+  isConfigured() { return !!(this.hash && this.salt); }
+}
+const passwordStore = new PasswordStore();
 /** 差价持久化文件路径 */
 const DIFFERENTIALS_FILE = path.join(__dirname, 'data', 'differentials.json');
 const SALES_DIFF_FILE = path.join(__dirname, 'data', 'sales-differentials.json');
 
-/** 管理员密码（运行时可变，初始从环境变量读取） */
-let adminPassword = process.env.ADMIN_PASSWORD;
 
 /** 登录失败次数记录（按 IP） */
 var loginAttempts = new Map();
@@ -106,7 +159,7 @@ class DifferentialStore {
    */
   set(metal, value) {
     if (this.data[metal] === undefined) {
-      throw new Error(`无效的金属类型: ${metal}`);
+      throw new Error('无效的金属类型: ' + metal);
     }
     this.data[metal] = value;
     this.persist();
@@ -202,6 +255,7 @@ class PriceCache {
     this.cache = {};
     this.differentialStore = differentialStore;
     this.status = '初始化中';
+    this.scraperPath = path.join(__dirname, 'scraper.js');
 
     // 初始化缓存为模拟数据
     METALS.forEach((m) => {
@@ -215,48 +269,61 @@ class PriceCache {
   }
 
   async update() {
-    // 通过 Python 子进程获取 CCMN 贵金属价格
-    await this._fetchFromPython();
-    this._ensureMockFallback();
-  }
-
-  /**
-   * 使用 Python (AKShare) 获取长江有色金属网贵金属行情
-   */
-  async _fetchFromPython() {
-    const scriptPath = path.join(__dirname, 'fetch_prices.py');
+    // 通过 scraper.js 获取贵金属价格
+    var startTs = Date.now();
     try {
-      const result = await new Promise((resolve, reject) => {
-        const child = spawn('python', [scriptPath], { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
-        let stdout = '', stderr = '';
-        child.stdout.on('data', (c) => { stdout += c.toString(); });
-        child.stderr.on('data', (c) => { stderr += c.toString(); });
-        child.on('close', (code) => {
-          if (code !== 0) { if (stderr) console.error('[Python] 错误:', stderr.trim()); reject(new Error('退出码 ' + code)); return; }
-          try { resolve(JSON.parse(stdout)); } catch(e) { reject(new Error('解析失败: ' + e.message)); }
+      const data = await this._runScraper();
+      var elapsed = Date.now() - startTs;
+      if (data.success && data.items && data.items.length > 0) {
+        const ts = Date.now();
+        data.items.forEach((item) => {
+          const key = SCRAPER_METAL_MAP[item.code];
+          if (key && typeof item.priceCny === 'number') {
+            this.cache[key] = {
+              internationalPriceCNYPerGram: item.priceCny,
+              domesticPriceCNY: item.priceCny,
+              timestamp: ts,
+              source: 'fx678',
+            };
+          }
         });
-        child.on('error', reject);
-      });
-      const ts = Date.now();
-      METALS.forEach((m) => {
-        const d = result[m.key];
-        if (d && typeof d.price === 'number') {
-          this.cache[m.key] = { internationalPriceCNYPerGram: d.price, domesticPriceCNY: d.price, timestamp: ts, source: 'ccmn' };
-        }
-      });
-    } catch(err) { console.error('[Python] 获取失败:', err.message); }
+        console.log('[价格更新] ' + new Date(startTs).toLocaleString() + ' | 成功 | 退出码 ' + data._exitCode + ' | 耗时 ' + elapsed + 'ms');
+        return;
+      }
+    } catch (err) {
+      var elapsed = Date.now() - startTs;
+      console.error('[价格更新] ' + new Date(startTs).toLocaleString() + ' | 失败 | ' + err.message + ' | 耗时 ' + elapsed + 'ms');
+    }
+    // 降级：使用模拟数据
+    this._mockFallback();
   }
 
-  /** 确保所有金属都有有效数据，Python 失败时使用模拟数据降级 */
-  _ensureMockFallback() {
-    METALS.forEach((metal) => {
-      const cached = this.cache[metal.key];
-      if (Date.now() - cached.timestamp > 90000) {
-        cached.domesticPriceCNY = jitter(MOCK_PRICES[metal.key].cny);
-        cached.internationalPriceCNYPerGram = cached.domesticPriceCNY;
-        cached.timestamp = Date.now();
-        cached.source = 'mock';
-      }
+  /** 执行 scraper.js 并解析输出 */
+  _runScraper() {
+    return new Promise((resolve, reject) => {
+      const child = spawn('node', [this.scraperPath], {
+        cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000,
+      });
+      let stdout = '', stderr = '';
+      child.stdout.on('data', (c) => { stdout += c.toString(); });
+      child.stderr.on('data', (c) => { stderr += c.toString(); });
+      child.on('close', (code) => {
+        if (code !== 0) { reject(new Error(stderr.trim() || '退出码 ' + code)); return; }
+        try { var d = JSON.parse(stdout); d._exitCode = code; resolve(d); } catch (e) { reject(new Error('JSON 解析失败: ' + e.message)); }
+      });
+      child.on('error', reject);
+    });
+  }
+
+  /** 模拟数据降级 */
+  _mockFallback() {
+    METALS.forEach((m) => {
+      this.cache[m.key] = {
+        internationalPriceCNYPerGram: jitter(MOCK_PRICES[m.key].cny),
+        domesticPriceCNY: jitter(MOCK_PRICES[m.key].cny),
+        timestamp: Date.now(),
+        source: 'mock',
+      };
     });
   }
 
@@ -369,11 +436,11 @@ app.post('/api/admin/login', (req, res) => {
     });
   }
 
-  if (!adminPassword) {
+  if (!passwordStore.isConfigured()) {
     return res.status(500).json({ error: '服务端未配置管理员密码' });
   }
 
-  if (password !== adminPassword) {
+  if (!passwordStore.verify(password)) {
     var current = loginAttempts.get(ip) || { count: 0 };
     current.count = (current.count || 0) + 1;
 
@@ -438,25 +505,16 @@ app.get('/api/admin/differentials', authMiddleware, (req, res) => {
 app.put('/api/admin/password', authMiddleware, (req, res) => {
   const { oldPassword, newPassword } = req.body;
 
-  // 验证原密码
-  if (oldPassword !== adminPassword) {
-    return res.status(401).json({ error: '原密码错误' });
+  try {
+    passwordStore.change(oldPassword, newPassword);
+    console.log('[密码] 管理员密码已修改并持久化');
+    res.json({ message: '密码修改成功' });
+  } catch (err) {
+    if (err.message === '原密码错误') {
+      return res.status(401).json({ error: err.message });
+    }
+    return res.status(400).json({ error: err.message });
   }
-
-  // 验证新密码格式
-  if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 4) {
-    return res.status(400).json({ error: '新密码长度至少 4 位' });
-  }
-
-  // 新密码不能与原密码相同
-  if (newPassword === adminPassword) {
-    return res.status(400).json({ error: '新密码不能与原密码相同' });
-  }
-
-  // 更新密码
-  adminPassword = newPassword;
-  console.log('[认证] 管理员密码已修改');
-  res.json({ message: '密码修改成功' });
 });
 app.put('/api/admin/differentials/:metal', authMiddleware, (req, res) => {
   const { metal } = req.params;
@@ -465,7 +523,7 @@ app.put('/api/admin/differentials/:metal', authMiddleware, (req, res) => {
   // 校验金属类型
   const validMetal = METALS.find((m) => m.key === metal);
   if (!validMetal) {
-    return res.status(400).json({ error: `无效的金属类型: ${metal}` });
+    return res.status(400).json({ error: '无效的金属类型: ' + metal });
   }
 
   // 校验差价数值
@@ -529,7 +587,7 @@ app.put('/api/admin/sales-differentials/:metal', authMiddleware, (req, res) => {
   });
 });
 
-// 管理后台页面路由
+// 微信二维码不再使用独立页面，已直接嵌入首页底部
 app.get('/admin', (req, res) => {
   // 禁止浏览器缓存，确保每次都会请求最新 JS
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -547,26 +605,33 @@ app.use((err, req, res, _next) => {
 
 // ---- 启动定时价格更新 ----
 
-/** 价格刷新间隔（毫秒） */
-const PRICE_UPDATE_INTERVAL = 15000;
+//** 获取 10~15 秒之间的随机等待时间（毫秒） */
+function randomInterval() {
+  return Math.floor(10000 + Math.random() * 5000);
+}
 
 /**
  * 启动定时价格更新
- * 1. 启动时立即拉取一次真实数据
- * 2. 之后每隔 15 秒拉取一次
+ * 1. 启动时立即拉取一次
+ * 2. 之后每次完成后等待 10~15 秒随机间隔再拉取
  */
 async function startPriceUpdates() {
-  console.log('[价格更新] 启动定时价格刷新，间隔 15 秒');
+  console.log('[价格更新] 启动定时价格刷新，间隔 10~15 秒随机');
   // 首次立即拉取
   await priceCache.update().catch(err => {
     console.error('[价格更新] 首次拉取失败:', err.message);
   });
-  // 后续每隔 15 秒拉取一次
-  setInterval(() => {
-    priceCache.update().catch(err => {
-      console.error('[价格更新] 定时拉取失败:', err.message);
-    });
-  }, PRICE_UPDATE_INTERVAL);
+  // 后续使用随机间隔
+  async function scheduleNext() {
+    const delay = randomInterval();
+    setTimeout(async () => {
+      await priceCache.update().catch(err => {
+        console.error('[价格更新] 定时拉取失败:', err.message);
+      });
+      scheduleNext();
+    }, delay);
+  }
+  scheduleNext();
 }
 
 // ---- 服务启动 ----
@@ -574,10 +639,20 @@ if (require.main === module) {
   startPriceUpdates();
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
-    console.log(`[服务启动] 贵金属回收报价系统运行于 http://localhost:${PORT}`);
-    console.log(`[服务启动] 管理后台: http://localhost:${PORT}/admin`);
+    console.log('[服务启动] 贵金属回收报价系统运行于 http://localhost:' + PORT);
+    console.log('[服务启动] 管理后台: http://localhost:' + PORT + '/admin');
   });
 }
 
 // ---- 导出（供测试使用）----
 module.exports = { app, DifferentialStore, AuthStore, PriceCache, METALS, salesDifferentialStore, resetLoginAttempts: function() { loginAttempts.clear(); } };
+
+
+
+
+
+
+
+
+
+

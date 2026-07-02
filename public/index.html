@@ -1,24 +1,22 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>贵金属回收报价</title>
-  <!-- 禁止搜索引擎收录 -->
+  <title>小王黄金烟酒</title>
   <meta name="robots" content="noindex">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <div id="app">
+  <div id="app" class="container">
     <!-- 页面头部 -->
     <header class="header">
       <div class="header-left">
-        <h1 class="header-title">贵金属回收报价</h1>
-        <span class="header-subtitle">实时行情 · 权威数据</span>
+        <h1 class="header-title">小王黄金烟酒</h1>
+        <span class="header-subtitle">各类烟酒 · 礼品回收</span>
       </div>
       <div class="header-right">
-        <span class="realtime-clock" id="realtimeClock">加载中...</span>
-        <span class="update-time" id="updateTime">更新中...</span>
+        <span class="realtime-clock" id="realtimeClock">--:--:--</span>
         <button class="admin-btn" id="adminBtn" title="管理后台">⚙️</button>
       </div>
     </header>
@@ -31,69 +29,94 @@
       <div class="loading" id="loadingIndicator">加载价格数据中...</div>
     </main>
 
-    <!-- 页面底部 -->
+    <!-- 服务承诺 -->
+    <section class="promo-section">
+      <div class="promo-card">
+        <p class="promo-line"><span class="promo-icon">🕐</span> 二十四小时在线服务</p>
+        <p class="promo-line"><span class="promo-icon">🚚</span> 全城免费上门服务，全城免费上门取送货</p>
+        <div class="promo-divider"></div>
+        <div class="promo-tagline">
+          <span class="promo-label">本店宗旨：</span>
+          <span class="promo-emphasis">价格优势</span>
+          <span class="promo-emphasis">价格优势</span>
+          <span class="promo-emphasis">价格优势</span>
+        </div>
+        <p class="promo-repeat">重要的事情说三遍</p>
+      </div>
+    </section>
+
+    <!-- 页面底部：联系方式与微信二维码 -->
     <footer class="footer">
-      <p>回收价 = 国际实时价 - 加工运营差价 | 数据来源：东方财富实时行情</p>
-      <p class="footer-disclaimer">本平台价格仅供参考，不构成交易依据</p>
+      <div class="footer-content">
+        <div class="footer-qr-section">
+          <img class="footer-qr-img" src="/qr-code.png" alt="微信二维码" width="120" height="120">
+          <span class="footer-qr-label">扫一扫加微信咨询</span>
+        </div>
+        <a class="footer-phone" id="phoneLink" href="javascript:void(0)">
+          <span class="footer-phone-number">📞 19191621889</span> <span class="footer-phone-copy-hint">（点击复制）</span>
+        </a>
+      </div>
     </footer>
+  </div>
 
-    <!-- ========== 管理后台浮层 ========== -->
-    <div class="overlay" id="adminOverlay">
-      <div class="overlay-backdrop" id="overlayBackdrop"></div>
-      <div class="overlay-panel">
+  <!-- ========== 管理后台浮层 ========== -->
+  <div class="overlay" id="adminOverlay">
+    <div class="overlay-backdrop" id="overlayBackdrop"></div>
+    <div class="overlay-panel">
 
-        <!-- 登录表单 -->
-        <div class="login-form" id="loginForm">
-          <h2 class="panel-title">管理员登录</h2>
-          <div class="form-group">
-            <label for="passwordInput" class="form-label">管理密码</label>
-            <input
-              type="password"
-              id="passwordInput"
-              class="form-input"
-              placeholder="请输入管理密码"
-              autocomplete="current-password"
-            >
+      <!-- 登录表单 -->
+      <div class="login-form" id="loginForm">
+        <h2 class="panel-title">管理员登录</h2>
+        <div class="form-group">
+          <label for="passwordInput" class="form-label">管理密码</label>
+          <input
+            type="password"
+            id="passwordInput"
+            class="form-input"
+            placeholder="请输入管理密码"
+            autocomplete="current-password"
+          >
+        </div>
+        <button class="btn btn-primary" id="loginBtn">登 录</button>
+        <p class="form-error" id="loginError" style="display:none;"></p>
+      </div>
+
+      <!-- 差价设置面板 -->
+      <div class="diff-panel" id="diffPanel" style="display:none;">
+        <div class="panel-header">
+          <h2 class="panel-title">差价设置</h2>
+          <button class="btn btn-text" id="logoutBtn">退出登录</button>
+        </div>
+        <div class="diff-card">
+          <div class="diff-card-header" onclick="toggleSection('diffList')">
+            收购差价 <span class="arrow">▶</span>
           </div>
-          <button class="btn btn-primary" id="loginBtn">登 录</button>
-          <p class="form-error" id="loginError" style="display:none;"></p>
+          <div class="diff-card-body collapsed" id="diffList">
+            <!-- 由 JavaScript 动态生成 -->
+          </div>
+        </div>
+        <div class="diff-card">
+          <div class="diff-card-header" onclick="toggleSection('salesDiffList')">
+            销售差价 <span class="arrow">▶</span>
+          </div>
+          <div class="diff-card-body collapsed" id="salesDiffList">
+            <!-- 由 JavaScript 动态生成 -->
+          </div>
         </div>
 
-        <!-- 差价设置面板 -->
-        <div class="diff-panel" id="diffPanel" style="display:none;">
-          <div class="panel-header">
-            <h2 class="panel-title">差价设置</h2>
-            <button class="btn btn-text" id="logoutBtn">退出登录</button>
-          </div>
-          <div class="diff-card">
-            <div class="diff-card-header" onclick="toggleSection('diffList')">
-              收购差价 <span class="arrow">▶</span>
-            </div>
-            <div class="diff-card-body collapsed" id="diffList">
-            <!-- 由 JavaScript 动态生成 -->
+        <!-- 密码修改区域 -->
+        <div class="pwd-section">
+          <button class="pwd-toggle" id="pwdToggleBtn">🔑 修改密码</button>
+          <div class="pwd-form" id="pwdForm">
+            <input type="password" id="oldPwdInput" class="form-input" placeholder="原密码" autocomplete="current-password">
+            <input type="password" id="newPwdInput" class="form-input" placeholder="新密码（至少 4 位）" autocomplete="new-password">
+            <input type="password" id="confirmPwdInput" class="form-input" placeholder="确认新密码" autocomplete="new-password">
+            <div class="pwd-actions">
+              <button class="btn btn-primary btn-small" id="savePwdBtn">保存</button>
+              <span class="pwd-status" id="pwdStatus"></span>
             </div>
           </div>
-          <div class="diff-card">
-            <div class="diff-card-header" onclick="toggleSection('salesDiffList')">
-              销售差价 <span class="arrow">▶</span>
-            </div>
-            <div class="diff-card-body collapsed" id="salesDiffList">
-            <!-- 由 JavaScript 动态生成 -->
-            </div>
-          </div>
-          <!-- 密码修改区域 -->
-          <div class="pwd-section">
-            <button class="pwd-toggle" id="pwdToggleBtn">修改密码</button>
-            <div class="pwd-form" id="pwdForm">
-              <input type="password" id="oldPwdInput" class="form-input" placeholder="原密码" autocomplete="current-password">
-              <input type="password" id="newPwdInput" class="form-input" placeholder="新密码（至少 4 位）" autocomplete="new-password">
-              <input type="password" id="confirmPwdInput" class="form-input" placeholder="确认新密码" autocomplete="new-password">
-              <div class="pwd-actions">
-                <button class="btn btn-primary btn-small" id="savePwdBtn">保存</button>
-                <span class="pwd-status" id="pwdStatus"></span>
-              </div>
-            </div>        </div>
-
+        </div>
       </div>
     </div>
   </div>
@@ -102,7 +125,6 @@
   <script src="/js/api.js"></script>
   <script src="/js/app.js"></script>
   <script src="/js/admin.js"></script>
+  <div id="toast" class="toast"></div>
 </body>
 </html>
-
-
