@@ -16,7 +16,9 @@
   },
   "devDependencies": {
     "chai": "^4.5.0",
+    "jimp": "^1.6.1",
     "mocha": "^11.1.0",
+    "qrcode-reader": "^1.0.4",
     "supertest": "^7.1.0"
   }
 }
