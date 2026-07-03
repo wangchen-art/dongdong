@@ -56,9 +56,11 @@ class PasswordStore {
   _save() {
     const dir = path.dirname(PASSWORD_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(PASSWORD_FILE, JSON.stringify({
+    const tmp = PASSWORD_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({
       hash: this.hash.toString('hex'), salt: this.salt.toString('hex'),
     }));
+    fs.renameSync(tmp, PASSWORD_FILE);
   }
   verify(password) {
     if (!this.hash || !this.salt) return false;
@@ -87,6 +89,20 @@ const SALES_DIFF_FILE = path.join(__dirname, 'data', 'sales-differentials.json')
 var loginAttempts = new Map();
 var MAX_LOGIN_ATTEMPTS = 5;
 var LOCKOUT_DURATION = 60 * 60 * 1000;
+
+/** 每小时清理过期登录失败记录，防止内存无限增长 */
+setInterval(function() {
+  var now = Date.now();
+  for (var ip of loginAttempts.keys()) {
+    var rec = loginAttempts.get(ip);
+    // 锁定已完全过期（超过锁定期 2 小时），或非锁定记录存留超 24 小时 → 清除
+    if ((rec.lockedUntil && now > rec.lockedUntil + 7200000) || (!rec.lockedUntil && now - rec._ts > 86400000)) {
+      loginAttempts.delete(ip);
+    }
+  }
+  // Map 过大时直接清空，极端兜底
+  if (loginAttempts.size > 10000) { loginAttempts.clear(); }
+}, 3600000);
 
 // ==========================================
 // 差价存储模块
@@ -129,7 +145,9 @@ class DifferentialStore {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
+      const tmp = this.filePath + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf-8');
+      fs.renameSync(tmp, this.filePath);
     } catch (err) {
       console.error('[差价存储] 持久化写入失败:', err.message);
     }
@@ -300,19 +318,32 @@ class PriceCache {
 
   /** 执行 scraper.js 并解析输出 */
   _runScraper() {
-    return new Promise((resolve, reject) => {
-      const child = spawn('node', [this.scraperPath], {
+    return new Promise(function(resolve, reject) {
+      var child = spawn('node', [this.scraperPath], {
         cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000,
       });
-      let stdout = '', stderr = '';
-      child.stdout.on('data', (c) => { stdout += c.toString(); });
-      child.stderr.on('data', (c) => { stderr += c.toString(); });
-      child.on('close', (code) => {
-        if (code !== 0) { reject(new Error(stderr.trim() || '退出码 ' + code)); return; }
-        try { var d = JSON.parse(stdout); d._exitCode = code; resolve(d); } catch (e) { reject(new Error('JSON 解析失败: ' + e.message)); }
+      var stdout = '', stderr = '';
+      var settled = false;
+      function done(err, result) {
+        if (settled) return;
+        settled = true;
+        child.stdout.removeAllListeners();
+        child.stderr.removeAllListeners();
+        child.removeAllListeners();
+        if (!child.killed) child.kill('SIGKILL');
+        if (err) reject(err);
+        else resolve(result);
+      }
+      child.stdout.on('data', function(c) { stdout += c.toString(); });
+      child.stderr.on('data', function(c) { stderr += c.toString(); });
+      child.on('close', function(code) {
+        if (code !== 0) { done(new Error(stderr.trim() || '退出码 ' + code)); return; }
+        try { var d = JSON.parse(stdout); d._exitCode = code; done(null, d); } catch (e) { done(new Error('JSON 解析失败: ' + e.message)); }
       });
-      child.on('error', reject);
-    });
+      child.on('error', done);
+      // 安全兜底：25 秒后强制 SIGKILL
+      setTimeout(function() { if (!settled) { child.kill('SIGKILL'); done(new Error('scraper 子进程超时')); } }, 25000);
+    }.bind(this));
   }
 
   /** 模拟数据降级 */
@@ -441,7 +472,7 @@ app.post('/api/admin/login', (req, res) => {
   }
 
   if (!passwordStore.verify(password)) {
-    var current = loginAttempts.get(ip) || { count: 0 };
+    var current = loginAttempts.get(ip) || { count: 0, _ts: Date.now() };
     current.count = (current.count || 0) + 1;
 
     if (current.count >= MAX_LOGIN_ATTEMPTS) {
