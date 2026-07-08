@@ -32,7 +32,7 @@ function startClock() {
   setInterval(tick, 1000);
 }
 
-function startPolling() { setInterval(refreshPrices, 12000); }
+function startPolling() { setInterval(refreshPrices, 5000); }
 
 async function refreshPrices() {
   try {

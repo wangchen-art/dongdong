@@ -273,54 +273,93 @@ class PriceCache {
     this.cache = {};
     this.differentialStore = differentialStore;
     this.status = '初始化中';
-    this.scraperPath = path.join(__dirname, 'scraper.js');
+    this.paqujinjiaDir = path.join(__dirname, 'paqujinjia');
+    this.paqujinjiaPath = path.join(this.paqujinjiaDir, process.platform === 'win32' ? 'paqujinjia.exe' : 'paqujinjia');
+    this.calibrating = false;
 
-    // 初始化缓存为模拟数据
+    // 初始化缓存
     METALS.forEach((m) => {
       this.cache[m.key] = {
-        internationalPriceCNYPerGram: MOCK_PRICES[m.key].cny,
-        domesticPriceCNY: MOCK_PRICES[m.key].cny,
+        domesticBuybackPrice: MOCK_PRICES[m.key].cny,
+        domesticSalesPrice: MOCK_PRICES[m.key].cny,
         timestamp: Date.now(),
-        source: 'mock',
+        source: 'initializing',
       };
     });
   }
 
+  /**
+   * 短周期快速获取（每 5 秒）
+   * 执行 paqujinjia.exe --json，解析返回的价格数据
+   */
   async update() {
-    // 通过 scraper.js 获取贵金属价格
     var startTs = Date.now();
     try {
-      const data = await this._runScraper();
+      const data = await this._runPaqujinjia('--json');
       var elapsed = Date.now() - startTs;
-      if (data.success && data.items && data.items.length > 0) {
-        const ts = Date.now();
-        data.items.forEach((item) => {
-          const key = SCRAPER_METAL_MAP[item.code];
-          if (key && typeof item.priceCny === 'number') {
+      if (data && data.status === 'ok' && data.prices) {
+        var NAME_MAP = { '黄金': 'gold', '白银': 'silver', '铂金': 'platinum', '钯金': 'palladium' };
+        var ts = Date.now();
+        for (var cnName in data.prices) {
+          var entry = data.prices[cnName];
+          var key = NAME_MAP[cnName];
+          if (key && typeof entry.ref_bp === 'number') {
             this.cache[key] = {
-              internationalPriceCNYPerGram: item.priceCny,
-              domesticPriceCNY: item.priceCny,
+              domesticBuybackPrice: entry.ref_bp,
+              domesticSalesPrice: entry.ref_sp,
               timestamp: ts,
-              source: 'fx678',
+              source: 'paqujinjia',
             };
           }
-        });
-        console.log('[价格更新] ' + new Date(startTs).toLocaleString() + ' | 成功 | 退出码 ' + data._exitCode + ' | 耗时 ' + elapsed + 'ms');
+        }
+        this.status = '正常运行';
+        console.log('[价格更新] 快速获取成功 | 耗时 ' + elapsed + 'ms');
         return;
       }
     } catch (err) {
       var elapsed = Date.now() - startTs;
-      console.error('[价格更新] ' + new Date(startTs).toLocaleString() + ' | 失败 | ' + err.message + ' | 耗时 ' + elapsed + 'ms');
+      console.error('[价格更新] 快速获取失败: ' + err.message + ' | 耗时 ' + elapsed + 'ms');
     }
-    // 降级：使用模拟数据
-    this._mockFallback();
   }
 
-  /** 执行 scraper.js 并解析输出 */
-  _runScraper() {
+  /**
+   * 长周期完整校准（每 2 分钟）
+   * 执行 paqujinjia.exe（无参数），更新 adjust.json
+   */
+  async calibrate() {
+    if (this.calibrating) {
+      console.log('[校准] 上一轮校准尚未完成，跳过');
+      return;
+    }
+    this.calibrating = true;
+    var startTs = Date.now();
+    console.log('[校准] 开始完整校准...');
+    try {
+      await this._runPaqujinjia(null);
+      var elapsed = Date.now() - startTs;
+      console.log('[校准] 完成 | 耗时 ' + elapsed + 'ms');
+      // 校准后立即快速获取，刷新缓存
+      await this.update();
+    } catch (err) {
+      var elapsed = Date.now() - startTs;
+      console.error('[校准] 失败: ' + err.message + ' | 耗时 ' + elapsed + 'ms');
+    } finally {
+      this.calibrating = false;
+    }
+  }
+
+  /**
+   * 执行 paqujinjia.exe
+   * @param {string|null} mode '--json' 或 null（完整模式）
+   * @returns {Promise<Object|null>}
+   */
+  _runPaqujinjia(mode) {
     return new Promise(function(resolve, reject) {
-      var child = spawn('node', [this.scraperPath], {
-        cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000,
+      var args = mode ? [mode] : [];
+      var child = spawn(this.paqujinjiaPath, args, {
+        cwd: this.paqujinjiaDir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: mode === '--json' ? 15000 : 30000,
       });
       var stdout = '', stderr = '';
       var settled = false;
@@ -337,25 +376,23 @@ class PriceCache {
       child.stdout.on('data', function(c) { stdout += c.toString(); });
       child.stderr.on('data', function(c) { stderr += c.toString(); });
       child.on('close', function(code) {
-        if (code !== 0) { done(new Error(stderr.trim() || '退出码 ' + code)); return; }
-        try { var d = JSON.parse(stdout); d._exitCode = code; done(null, d); } catch (e) { done(new Error('JSON 解析失败: ' + e.message)); }
+        if (code !== 0) {
+          done(new Error(stderr.trim() || '退出码 ' + code));
+          return;
+        }
+        if (mode === '--json') {
+          try { var d = JSON.parse(stdout); done(null, d); }
+          catch (e) { done(new Error('JSON 解析失败: ' + e.message)); }
+        } else {
+          if (stderr.trim()) console.warn('[paqujinjia] stderr: ' + stderr.trim());
+          done(null, null);
+        }
       });
       child.on('error', done);
-      // 安全兜底：25 秒后强制 SIGKILL
-      setTimeout(function() { if (!settled) { child.kill('SIGKILL'); done(new Error('scraper 子进程超时')); } }, 25000);
+      setTimeout(function() {
+        if (!settled) { child.kill('SIGKILL'); done(new Error('paqujinjia 子进程超时')); }
+      }, mode === '--json' ? 20000 : 35000);
     }.bind(this));
-  }
-
-  /** 模拟数据降级 */
-  _mockFallback() {
-    METALS.forEach((m) => {
-      this.cache[m.key] = {
-        internationalPriceCNYPerGram: jitter(MOCK_PRICES[m.key].cny),
-        domesticPriceCNY: jitter(MOCK_PRICES[m.key].cny),
-        timestamp: Date.now(),
-        source: 'mock',
-      };
-    });
   }
 
   /**
@@ -363,35 +400,37 @@ class PriceCache {
    * @returns {Array.<Object>} 前端展示数据
    */
   getAll() {
-    const differentials = this.differentialStore.getAll();
+    var differentials = this.differentialStore.getAll();
 
-    return METALS.map((metal) => {
-      const price = this.cache[metal.key];
-      const diff = differentials[metal.key] || 0;
+    return METALS.map(function(metal) {
+      var price = this.cache[metal.key];
+      var diff = differentials[metal.key] || 0;
       var salesDiff = salesDifferentialStore.getAll()[metal.key] || 0;
 
-      // 回收价 = 国际价 - 回收差价
-      const recyclingPrice = parseFloat(
-        (price.internationalPriceCNYPerGram - diff).toFixed(2)
+      // 回收价 = 大盘回购价 - 收购差价
+      var recyclingPrice = parseFloat(
+        (price.domesticBuybackPrice - diff).toFixed(2)
       );
-      // 销售价 = 国际价 + 销售差价
-      const salesPrice = parseFloat(
-        (price.internationalPriceCNYPerGram + salesDiff).toFixed(2)
+      // 销售价 = 大盘销售价 + 销售差价
+      var salesPrice = parseFloat(
+        (price.domesticSalesPrice + salesDiff).toFixed(2)
       );
 
       return {
         metal: metal.key,
         name: metal.name,
         symbol: metal.symbol,
-        internationalPrice: price.internationalPriceCNYPerGram,
-        domesticPrice: price.domesticPriceCNY,
+        internationalPrice: price.domesticBuybackPrice,
+        domesticPrice: price.domesticBuybackPrice,
+        domesticBuybackPrice: price.domesticBuybackPrice,
+        domesticSalesPrice: price.domesticSalesPrice,
         recyclingPrice: recyclingPrice,
         salesPrice: salesPrice,
         differential: diff,
         lastUpdated: price.timestamp,
         source: price.source,
       };
-    });
+    }.bind(this));
   }
 }
 
@@ -647,22 +686,33 @@ function randomInterval() {
  * 2. 之后每次完成后等待 10~15 秒随机间隔再拉取
  */
 async function startPriceUpdates() {
-  console.log('[价格更新] 启动定时价格刷新，间隔 10~15 秒随机');
-  // 首次立即拉取
-  await priceCache.update().catch(err => {
-    console.error('[价格更新] 首次拉取失败:', err.message);
+  // 启动时清除旧的校准文件，确保每次重启都重新生成
+  try {
+    var adjPath = path.join(__dirname, 'paqujinjia', 'adjust.json');
+    fs.unlinkSync(adjPath);
+    console.log('[价格更新] 已清除旧的 adjust.json');
+  } catch (e) { /* 文件不存在时忽略 */ }
+
+  console.log('[价格更新] 启动双周期价格刷新：校准周期 120 秒，快速获取周期 5 秒');
+
+  // 首次立即校准 + 快速获取
+  await priceCache.calibrate().catch(function(err) {
+    console.error('[价格更新] 首次校准失败:', err.message);
   });
-  // 后续使用随机间隔
-  async function scheduleNext() {
-    const delay = randomInterval();
-    setTimeout(async () => {
-      await priceCache.update().catch(err => {
-        console.error('[价格更新] 定时拉取失败:', err.message);
-      });
-      scheduleNext();
-    }, delay);
-  }
-  scheduleNext();
+
+  // 短周期：每 5 秒快速获取
+  setInterval(async function() {
+    await priceCache.update().catch(function(err) {
+      console.error('[价格更新] 快速获取失败:', err.message);
+    });
+  }, 5000);
+
+  // 长周期：每 2 分钟完整校准
+  setInterval(async function() {
+    await priceCache.calibrate().catch(function(err) {
+      console.error('[价格更新] 完整校准失败:', err.message);
+    });
+  }, 120000);
 }
 
 // ---- 服务启动 ----
@@ -677,7 +727,6 @@ if (require.main === module) {
 
 // ---- 导出（供测试使用）----
 module.exports = { app, DifferentialStore, AuthStore, PriceCache, METALS, salesDifferentialStore, resetLoginAttempts: function() { loginAttempts.clear(); } };
-
 
 
 

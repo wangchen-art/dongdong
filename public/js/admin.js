@@ -1,4 +1,4 @@
-// 销售差价管理
+﻿// 销售差价管理
 var metalNames = { gold: "黄金", silver: "白银", platinum: "铂金", palladium: "钯金" };
 
 async function loadSalesDifferentials(token) {
@@ -44,6 +44,7 @@ async function saveSalesDiff(metal, token) {
     // 更新显示
     var currentEl = document.querySelector('#salesDiffList .diff-row:nth-child(' + (Object.keys({gold:1,silver:2,platinum:3,palladium:4}).indexOf(metal)+1) + ') .diff-current-price');
     if (currentEl) currentEl.textContent = '+' + value + ' 元/克';
+    showToast("\u2713 \u5df2\u4fdd\u5b58\u9500\u552e\u5dee\u4ef7");
   } catch(err) {
     status.textContent = err.message;
     status.className = 'diff-status error';
@@ -61,7 +62,11 @@ async function saveAllRecyclingDiff() {
     if (isNaN(val) || val < 0) continue;
     try { await API.setDifferential(metal, val, currentToken); } catch(e) { console.error(e.message); }
   }
-  API.fetchPrices().then(function(p) { loadDifferentials(p, currentToken); });
+  // 刷新差价面板显示
+  API.getDifferentials(currentToken).then(function(d) { 
+    renderDiffPanel(d.differentials);
+    showToast("\u2713 \u5df2\u4fdd\u5b58\u6536\u8d2d\u5dee\u4ef7");
+  });
 }
 
 // 批量保存差价（销售）
@@ -76,6 +81,7 @@ async function saveAllSalesDiff() {
     try { await API.setSalesDifferential(metal, val, currentToken); } catch(e) { console.error(e.message); }
   }
   loadSalesDifferentials(currentToken);
+  showToast("\u2713 \u5df2\u4fdd\u5b58\u9500\u552e\u5dee\u4ef7");
 }
 
 // 折叠展开切换
@@ -249,8 +255,9 @@ function showDiffPanel(token) {
   // 加载差价数据到内存中，等用户展开卡片时显示
   if (token) {
     loadSalesDifferentials(token);
-    API.fetchPrices().then(function(prices) {
-      loadDifferentials(prices, token);
+    // 加载差价数据刷新面板
+    API.getDifferentials(token).then(function(d) {
+      renderDiffPanel(d.differentials);
     });
   }
 }
@@ -345,7 +352,7 @@ function renderDiffPanel(differentials) {
 
     row.innerHTML = `
       <span class="diff-metal">${metal.name}</span>
-      <span class="diff-current-price" id="diff-price-${metal.key}">--</span>
+      <span class="diff-current-price" id="diff-price-${metal.key}">-${currentDiff} 元/克</span>
       <input
         type="number"
         class="diff-input"
@@ -374,24 +381,9 @@ function renderDiffPanel(differentials) {
   saveAllBtn.onclick = saveAllRecyclingDiff;
   diffList.appendChild(saveAllBtn);
 
-  // 尝试获取当前价格显示在差价面板中
-  updateDiffPanelPrices();
 }
 
-/** 从最新价格数据中更新差价面板的实时价显示 */
-async function updateDiffPanelPrices() {
-  try {
-    const prices = await API.fetchPrices();
-    prices.forEach((item) => {
-      const priceEl = document.getElementById(`diff-price-${item.metal}`);
-      if (priceEl) {
-        priceEl.textContent = `¥${item.domesticPrice.toFixed(2)}`;
-      }
-    });
-  } catch {
-    // 获取价格失败，静默处理
-  }
-}
+
 
 // ---- 差价保存逻辑 ----
 
@@ -410,15 +402,6 @@ async function handleSaveDifferential(metal) {
     return;
   }
 
-  // 获取当前国内价做客户端验证
-  var priceEl = document.getElementById('diff-price-' + metal);
-  if (priceEl) {
-    var currentPrice = parseFloat(priceEl.textContent.replace('¥', ''));
-    if (!isNaN(currentPrice) && value > currentPrice) {
-      showDiffStatus(metal, '差价不能大于当前价 ' + currentPrice.toFixed(2), 'error');
-      return;
-    }
-  }
 
   saveBtn.disabled = true;
   saveBtn.textContent = '保存中...';
@@ -427,6 +410,7 @@ async function handleSaveDifferential(metal) {
   try {
     const result = await API.setDifferential(metal, value, currentToken);
     showDiffStatus(metal, '已保存', '');
+    showToast("\u2713 \u5df2\u4fdd\u5b58\u6536\u8d2d\u5dee\u4ef7");
     // 保存后自动刷新价格看板，使回收价更新
     await refreshPrices();
   } catch (err) {
@@ -501,3 +485,18 @@ function showDiffStatus(metal, msg, type) {
 
 
 
+
+
+/**
+ * 显示 Toast 提示框（复用 app.js 的样式）
+ * @param {string} msg - 提示消息
+ */
+function showToast(msg) {
+  var t = document.getElementById("toast");
+  if (!t) return;
+  t.textContent = msg;
+  t.className = "toast show";
+  setTimeout(function() {
+    t.classList.remove("show");
+  }, 1200);
+}

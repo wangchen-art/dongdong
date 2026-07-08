@@ -10,7 +10,7 @@ const API = {
    * @returns {Promise<Array>} 价格数组
    */
   async fetchPrices() {
-    const res = await fetch('/api/prices');
+    const res = await fetch('/api/prices?_=' + Date.now());
     if (!res.ok) throw new Error('获取价格数据失败');
     return res.json();
   },
@@ -114,3 +114,4 @@ const API = {
     return data;
   },
 };
+
