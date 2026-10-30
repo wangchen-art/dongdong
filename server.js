@@ -276,13 +276,14 @@ class PriceCache {
     this.paqujinjiaDir = path.join(__dirname, 'paqujinjia');
     this.paqujinjiaPath = path.join(this.paqujinjiaDir, process.platform === 'win32' ? 'paqujinjia.exe' : 'paqujinjia');
     this.calibrating = false;
+    this.lastError = null;
 
     // 初始化缓存
     METALS.forEach((m) => {
       this.cache[m.key] = {
         domesticBuybackPrice: MOCK_PRICES[m.key].cny,
         domesticSalesPrice: MOCK_PRICES[m.key].cny,
-        timestamp: Date.now(),
+        timestamp: 0,
         source: 'initializing',
       };
     });
@@ -300,23 +301,32 @@ class PriceCache {
       if (data && data.status === 'ok' && data.prices) {
         var NAME_MAP = { '黄金': 'gold', '白银': 'silver', '铂金': 'platinum', '钯金': 'palladium' };
         var ts = Date.now();
-        for (var cnName in data.prices) {
+        var nextCache = {};
+        for (var cnName in NAME_MAP) {
           var entry = data.prices[cnName];
           var key = NAME_MAP[cnName];
-          if (key && typeof entry.ref_bp === 'number') {
-            this.cache[key] = {
+          // 整批校验后再替换缓存，避免部分品种更新或无效价格覆盖旧值。
+          if (!entry || !Number.isFinite(entry.ref_bp) || !Number.isFinite(entry.ref_sp) ||
+              entry.ref_bp <= 0 || entry.ref_sp < entry.ref_bp || entry.ref_sp > entry.ref_bp * 2) {
+            throw new Error(cnName + ' 基准报价缺失或异常');
+          }
+          nextCache[key] = {
               domesticBuybackPrice: entry.ref_bp,
               domesticSalesPrice: entry.ref_sp,
               timestamp: ts,
               source: 'paqujinjia',
-            };
-          }
+          };
         }
+        this.cache = nextCache;
+        this.lastError = null;
         this.status = '正常运行';
         console.log('[价格更新] 快速获取成功 | 耗时 ' + elapsed + 'ms');
         return;
       }
+      throw new Error(data && data.status || '抓取程序返回无效数据');
     } catch (err) {
+      this.lastError = err.message;
+      this.status = '更新失败，保留上次有效报价';
       var elapsed = Date.now() - startTs;
       console.error('[价格更新] 快速获取失败: ' + err.message + ' | 耗时 ' + elapsed + 'ms');
     }
@@ -429,6 +439,8 @@ class PriceCache {
         differential: diff,
         lastUpdated: price.timestamp,
         source: price.source,
+        available: price.source !== 'initializing',
+        stale: !!this.lastError || price.source === 'initializing' || Date.now() - price.timestamp > 30000,
       };
     }.bind(this));
   }

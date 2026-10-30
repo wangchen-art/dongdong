@@ -7,7 +7,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "pretest": "node -e \"try{require('fs').unlinkSync('./data/admin-password.json')}catch(e){};try{require('fs').unlinkSync('./data/differentials.json')}catch(e){};try{require('fs').unlinkSync('./data/sales-differentials.json')}catch(e){}\"",
-    "test": "mocha test/features.test.js test/admin-flow.test.js --timeout 10000 --exit"
+    "test": "mocha test/features.test.js test/admin-flow.test.js test/price-source.test.js --timeout 10000 --exit"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

@@ -38,7 +38,11 @@ async function refreshPrices() {
   try {
     var prices = await API.fetchPrices();
     renderPrices(prices);
-    hideStatus();
+    if (prices.some(function(item) { return item.stale; })) {
+      showStatus('报价更新异常：当前显示上次有效数据，未获取到报价的品种显示 --', 'warning');
+    } else {
+      hideStatus();
+    }
   } catch (err) { showStatus("数据更新中...", "warning"); }
 }
 
@@ -67,6 +71,10 @@ function renderPrices(prices) {
   }
   var tbody = document.getElementById("priceTableBody");
   prices.forEach(function(item) {
+    if (item.available === false) {
+      item.recyclingPrice = null;
+      item.salesPrice = null;
+    }
     var row = document.getElementById("metal-" + item.metal);
     if (!lastPrice[item.metal]) {
       lastPrice[item.metal] = {};
@@ -109,6 +117,7 @@ function renderPrices(prices) {
 }
 
 function formatCNY(val) {
+  if (!Number.isFinite(val)) return '--';
   return "\u00a5" + val.toLocaleString("zh-CN", {minimumFractionDigits:2, maximumFractionDigits:2});
 }
 

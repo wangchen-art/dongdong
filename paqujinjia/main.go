@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"os"
 	"regexp"
@@ -52,9 +53,10 @@ type MinuteSnapshot struct {
 }
 
 type CalibData struct {
-	UpdatedAt string                  `json:"updated_at"`
-	Offsets   map[string]MetalOffset  `json:"offsets"`
-	History   []MinuteSnapshot        `json:"history"`
+	SchemaVersion int                    `json:"schema_version"`
+	UpdatedAt     string                 `json:"updated_at"`
+	Offsets       map[string]MetalOffset `json:"offsets"`
+	History       []MinuteSnapshot       `json:"history"`
 	// 分钟内缓存，避免同一分钟重复请求
 	LastRefMinute string             `json:"last_ref_minute"`
 	LastRefBuy    map[string]float64 `json:"last_ref_buy"`
@@ -67,13 +69,16 @@ type MetalDef struct {
 }
 
 var metalDefs = []MetalDef{
-	{Name: "黄金", HJIndex: 12},
-	{Name: "白银", HJIndex: 16},
-	{Name: "铂金", HJIndex: 20},
-	{Name: "钯金", HJIndex: 24},
+	{Name: "黄金", HJIndex: 1},
+	{Name: "白银", HJIndex: 5},
+	{Name: "铂金", HJIndex: 9},
+	{Name: "钯金", HJIndex: 13},
 }
 
 const ADJUST_FILE = "adjust.json"
+
+// 字段布局修复后，旧校准数据不能继续使用。
+const CALIB_SCHEMA_VERSION = 2
 const MAX_HISTORY = 10
 const STABLE_MINUTES = 3
 const CHANGE_THRESHOLD = 0.6
@@ -87,6 +92,9 @@ func fetchPlain(url string) (string, error) {
 		return "", fmt.Errorf("HTTP GET 失败: %v", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP 状态异常: %d", resp.StatusCode)
+	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("读取响应失败: %v", err)
@@ -119,41 +127,70 @@ func fetchHuangjinjiage(calib *CalibData) (map[string]HuangItem, bool, error) {
 		return nil, false, err
 	}
 
+	result, err := parseHuangjinjiage(body)
+	if err != nil {
+		return nil, false, err
+	}
+	// 整批解析及校验成功后再写入分钟缓存。
+	calib.LastRefMinute = minLabel
+	calib.LastRefBuy = make(map[string]float64)
+	calib.LastRefSell = make(map[string]float64)
+	for name, item := range result {
+		calib.LastRefBuy[name] = item.BuyPrice
+		calib.LastRefSell[name] = item.SellPrice
+	}
+	return result, false, nil
+}
+
+func validPricePair(buy, sell float64) bool {
+	return !math.IsNaN(buy) && !math.IsNaN(sell) &&
+		!math.IsInf(buy, 0) && !math.IsInf(sell, 0) && buy > 0 && sell >= buy
+}
+
+func parseHuangjinjiage(body string) (map[string]HuangItem, error) {
 	re := regexp.MustCompile(`"\[(.*?)\]"`)
 	match := re.FindStringSubmatch(body)
 	if len(match) < 2 {
 		re2 := regexp.MustCompile(`= \[(.*?)\];`)
 		match2 := re2.FindStringSubmatch(body)
 		if len(match2) < 2 {
-			return nil, false, fmt.Errorf("无法解析 panjia2.js 数据")
+			return nil, fmt.Errorf("无法解析 panjia2.js 数据")
 		}
 		match = match2
 	}
 
-	parts := strings.Split("["+match[1]+"]", ",")
-	if len(parts) < 30 {
-		return nil, false, fmt.Errorf("数据字段不足 (got %d)", len(parts))
+	parts := strings.Split(match[1], ",")
+	if len(parts) < 17 || strings.TrimSpace(parts[0]) != "1" {
+		return nil, fmt.Errorf("panjia2 数据布局异常 (got %d)", len(parts))
 	}
 
-	// 更新缓存
+	// 不允许缺失值、零值或错位的最高最低价进入校准过程。
 	result := make(map[string]HuangItem)
-	calib.LastRefMinute = minLabel
-	calib.LastRefBuy = make(map[string]float64)
-	calib.LastRefSell = make(map[string]float64)
 
 	for _, m := range metalDefs {
 		idx := m.HJIndex
-		buy, _ := strconv.ParseFloat(strings.TrimSpace(parts[idx]), 64)
-		sell, _ := strconv.ParseFloat(strings.TrimSpace(parts[idx+1]), 64)
-		high, _ := strconv.ParseFloat(strings.TrimSpace(parts[idx+2]), 64)
-		low, _ := strconv.ParseFloat(strings.TrimSpace(parts[idx+3]), 64)
+		values := make([]float64, 4)
+		for i := range values {
+			value, err := strconv.ParseFloat(strings.TrimSpace(parts[idx+i]), 64)
+			if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+				return nil, fmt.Errorf("%s 字段 %d 无效: %q", m.Name, idx+i, parts[idx+i])
+			}
+			values[i] = value
+		}
+		buy, sell, high, low := values[0], values[1], values[2], values[3]
+		if !validPricePair(buy, sell) || high < low || sell > high || sell < low {
+			return nil, fmt.Errorf("%s 报价关系异常，拒绝校准", m.Name)
+		}
 		result[m.Name] = HuangItem{
 			Name: m.Name, BuyPrice: buy, SellPrice: sell, High: high, Low: low,
 		}
-		calib.LastRefBuy[m.Name] = buy
-		calib.LastRefSell[m.Name] = sell
 	}
-	return result, false, nil
+	if result["黄金"].BuyPrice <= result["白银"].BuyPrice ||
+		result["铂金"].BuyPrice <= result["白银"].BuyPrice ||
+		result["钯金"].BuyPrice <= result["白银"].BuyPrice {
+		return nil, fmt.Errorf("金属价格关系异常，可能发生字段错位")
+	}
+	return result, nil
 }
 
 // ====== 舟托数据源 ======
@@ -166,6 +203,9 @@ func fetchZhoutuo() (map[string]ZhoutuoItem, error) {
 		return nil, fmt.Errorf("HTTP GET 失败: %v", err)
 	}
 	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("舟拓 HTTP 状态异常: %d", r.StatusCode)
+	}
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %v", err)
@@ -191,6 +231,12 @@ func fetchZhoutuo() (map[string]ZhoutuoItem, error) {
 			result["钯金"] = item
 		}
 	}
+	for _, m := range metalDefs {
+		item, ok := result[m.Name]
+		if !ok || !validPricePair(item.BP, item.SP) {
+			return nil, fmt.Errorf("舟拓 %s 报价缺失或无效", m.Name)
+		}
+	}
 	return result, nil
 }
 
@@ -204,7 +250,9 @@ func loadCalib() CalibData {
 		data.History = []MinuteSnapshot{}
 		return data
 	}
-	json.Unmarshal(raw, &data)
+	if json.Unmarshal(raw, &data) != nil || data.SchemaVersion != CALIB_SCHEMA_VERSION {
+		return CalibData{Offsets: make(map[string]MetalOffset), History: []MinuteSnapshot{}}
+	}
 	if data.Offsets == nil {
 		data.Offsets = make(map[string]MetalOffset)
 	}
@@ -215,6 +263,7 @@ func loadCalib() CalibData {
 }
 
 func saveCalib(data CalibData) error {
+	data.SchemaVersion = CALIB_SCHEMA_VERSION
 	raw, _ := json.MarshalIndent(data, "", "  ")
 	return ioutil.WriteFile(ADJUST_FILE, raw, 0644)
 }
@@ -222,7 +271,7 @@ func saveCalib(data CalibData) error {
 // ====== 核心判定逻辑 ======
 
 func currentMinute() string {
-	return time.Now().Format("15:04")
+	return time.Now().Format("2006-01-02 15:04")
 }
 
 type TrendResult struct {
@@ -283,7 +332,7 @@ func round2(v float64) float64 {
 func main() {
 	now := time.Now()
 	nowStr := now.Format("2006-01-02 15:04:05")
-	minLabel := now.Format("15:04")
+	minLabel := currentMinute()
 
 	// 检测参数
 	isQuick := false
@@ -322,7 +371,7 @@ func main() {
 	hjData, fromCache, err := fetchHuangjinjiage(&calib)
 	if err != nil {
 		fmt.Printf("失败: %v\n", err)
-		return
+		os.Exit(1)
 	}
 	cacheLabel := ""
 	if fromCache {
@@ -337,7 +386,7 @@ func main() {
 	ztData, err := fetchZhoutuo()
 	if err != nil {
 		fmt.Printf("失败: %v\n", err)
-		return
+		os.Exit(1)
 	}
 	fmt.Printf("OK (%d个品种)\n\n", len(ztData))
 
@@ -553,11 +602,11 @@ type PriceEntry struct {
 }
 
 type JSONOutput struct {
-	Time     string                 `json:"time"`
-	Minute   string                 `json:"minute"`
-	CalibAt  string                 `json:"calib_updated_at"`
-	Prices   map[string]PriceEntry  `json:"prices"`
-	Status   string                 `json:"status"`
+	Time    string                `json:"time"`
+	Minute  string                `json:"minute"`
+	CalibAt string                `json:"calib_updated_at"`
+	Prices  map[string]PriceEntry `json:"prices"`
+	Status  string                `json:"status"`
 }
 
 func runJSON() {
@@ -583,17 +632,15 @@ func runJSON() {
 
 	for _, m := range metalDefs {
 		zt, ztOK := ztData[m.Name]
-		if !ztOK {
-			continue
-		}
 		off, hasOff := calib.Offsets[m.Name]
-		if !hasOff {
-			continue
+		if !ztOK || !hasOff || !validPricePair(zt.BP-off.BPOffset, zt.SP-off.SPOffset) {
+			json.NewEncoder(os.Stdout).Encode(JSONOutput{Status: "error: 校准数据缺失或价格无效，请重新校准"})
+			return
 		}
 		output.Prices[m.Name] = PriceEntry{
 			ZtBP: zt.BP, ZtSP: zt.SP,
-			RefBP: round2(zt.BP - off.BPOffset),
-			RefSP: round2(zt.SP - off.SPOffset),
+			RefBP:    round2(zt.BP - off.BPOffset),
+			RefSP:    round2(zt.SP - off.SPOffset),
 			BPOffset: round2(off.BPOffset),
 			SPOffset: round2(off.SPOffset),
 		}
